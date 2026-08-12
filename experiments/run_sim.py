@@ -125,7 +125,7 @@ def run(args) -> dict:
         att_period_rows.append((period_start_day, day, average_transport_time_days))
         if not args.quiet:
             print(
-                f"  day {day:>4}/{simulation_days}: "
+                f"[{tag}] day {day:>4}/{simulation_days}: "
                 f"ATT {average_transport_time_days:6.2f} d  "
                 f"({time.perf_counter() - started_at:6.1f}s)",
                 flush=True,

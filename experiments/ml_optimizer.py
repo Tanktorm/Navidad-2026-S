@@ -192,7 +192,15 @@ def run_seed(params_path: Path, seed: int, args, tag: str) -> float:
         command += ["--warmup", str(args.warmup)]
 
     completed = subprocess.run(
-        command, cwd=str(PROJECT_ROOT), capture_output=True, text=True
+        command,
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        # Own process group: see the note in run_batch.py — otherwise a stray
+        # console Ctrl+C kills the simulations of an unattended study.
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        ),
     )
     if completed.returncode != 0:
         raise RuntimeError(

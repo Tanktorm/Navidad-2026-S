@@ -32,6 +32,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUN_SIM = PROJECT_ROOT / "experiments" / "run_sim.py"
 
+# On Windows every process attached to the same console receives the console
+# control events. A batch left running unattended (a scheduled task, a detached
+# shell) then loses its children to a stray Ctrl+C, which shows up as exit code
+# 0xC000013A. Giving each run its own process group keeps that from happening.
+CREATION_FLAGS = (
+    subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+)
+
 
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -51,6 +59,10 @@ def parse_arguments(argv=None):
                              "(default: Output/runs)")
     parser.add_argument("--no-csv", action="store_true",
                         help="skip the per-run CSV set")
+    parser.add_argument("--quiet", action="store_true",
+                        help="hide the per-period progress of each run. Without "
+                             "it the runs stream their progress, which is the "
+                             "only way to see how far a long batch has got.")
     return parser.parse_args(argv)
 
 
@@ -65,8 +77,9 @@ def build_commands(args):
             "--seed", str(seed),
             "--tag", tag,
             "--strategy", args.strategy,
-            "--quiet",
         ]
+        if args.quiet:
+            command.append("--quiet")
         if args.params:
             command += ["--params", str(Path(args.params).resolve())]
         if args.days is not None:
@@ -82,15 +95,19 @@ def build_commands(args):
 def run_one(item):
     tag, command = item
     started = time.perf_counter()
+    # stdout is inherited so the progress of a long run is visible live; only
+    # stderr is captured, and only to be able to report a failure.
     completed = subprocess.run(
         command,
         cwd=str(PROJECT_ROOT),
-        capture_output=True,
+        stderr=subprocess.PIPE,
         text=True,
+        creationflags=CREATION_FLAGS,
     )
     elapsed = time.perf_counter() - started
     if completed.returncode != 0:
-        print(f"[{tag}] FAILED after {elapsed:.0f}s", flush=True)
+        print(f"[{tag}] FAILED after {elapsed:.0f}s "
+              f"(exit code {completed.returncode})", flush=True)
         print(completed.stderr[-2000:], flush=True)
         return {"tag": tag, "failed": True, "stderr": completed.stderr[-2000:]}
 
