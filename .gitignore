@@ -1,0 +1,11 @@
+# entorno local
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# salidas de corridas y del optimizador (se regeneran)
+Output/runs/
+Output/optuna/
+Output/Analysis/
+Logs/
