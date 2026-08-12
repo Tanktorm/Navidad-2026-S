@@ -47,6 +47,9 @@ def parse_arguments(argv=None):
                         help="measured days (default: config SIMULATION_DAYS)")
     parser.add_argument("--warmup", type=int, default=None,
                         help="warm-up days (default: config WARM_UP_DAYS)")
+    parser.add_argument("--warmup-chunk", type=int, default=20,
+                        help="print a progress line every N warm-up days; "
+                             "0 runs the warm-up in one go (default: 20)")
     parser.add_argument("--interval", type=int, default=None,
                         help="statistics interval in days (default: config value)")
     parser.add_argument("--strategy", choices=["on", "off"], default="on",
@@ -103,7 +106,24 @@ def run(args) -> dict:
 
     started_at = time.perf_counter()
     sim = Model(context, seed=args.seed)
-    sim.warmup(period=dt.timedelta(days=warm_up_days))
+
+    # The warm-up is the slowest part of a run and says nothing while it works.
+    # Splitting it into chunks only moves where the statistics reset happens
+    # (every chunk instead of once at the end), which changes nothing: the reset
+    # that counts is the last one, and the event sequence is identical. It buys
+    # a progress line, which on a run this long is worth having.
+    chunk_days = args.warmup_chunk if args.warmup_chunk else warm_up_days
+    remaining = warm_up_days
+    while remaining > 0:
+        step = min(chunk_days, remaining)
+        sim.warmup(period=dt.timedelta(days=step))
+        remaining -= step
+        if not args.quiet and chunk_days < warm_up_days:
+            print(
+                f"[{tag}] warm-up {warm_up_days - remaining:>4}/{warm_up_days} d "
+                f"({time.perf_counter() - started_at:6.1f}s)",
+                flush=True,
+            )
     warm_up_seconds = time.perf_counter() - started_at
 
     measurement_start_time = sim.clock_time
