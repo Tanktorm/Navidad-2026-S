@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from maritime_data_context import Booking
 
+from . import challenger_routing
 from .strategy_params import PARAMS, STRATEGY_ENABLED
 
 
@@ -448,6 +449,12 @@ class UserStrategy:
         """
         if not STRATEGY_ENABLED:
             return None
+
+        mode = PARAMS["ROUTING_MODE"]
+        if mode == "challenger":
+            return challenger_routing.assign_challenger(context, now, shipment)
+        if mode == "rescue":
+            return challenger_routing.assign_rescue(context, now, shipment)
 
         demand = shipment.demand
         origin_port = demand.origin_port

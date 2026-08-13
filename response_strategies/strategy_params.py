@@ -19,6 +19,26 @@ from pathlib import Path
 
 
 DEFAULTS = {
+    # --- que politica de ruteo inicial se usa ------------------------------
+    # "time"       : shortest path con costo en horas (sailing + espera de
+    #                embarque + transbordo + cola).
+    # "challenger" : CHALLENGER E10 tal como esta especificado en la guia:
+    #                se reconstruye la decision del Default y solo si esa ruta
+    #                atraviesa una disrupcion activa se busca una alternativa.
+    # "rescue"     : semantica del Default en todo, salvo cuando el Default se
+    #                queda sin ninguna ruta posible. Ahi, en vez de dejar la
+    #                carga esperando a que termine la disrupcion, se cobra el
+    #                tramo congestionado por su multiplicador y se enruta.
+    "ROUTING_MODE": "time",
+    # Margen minimo de distancia efectiva que una alternativa debe ahorrar
+    # para sustituir al Default (modo "challenger").
+    "MIN_EFFECTIVE_SAVING": 0.0,
+    # Transbordos extra que una alternativa puede agregar sobre el Default.
+    "MAX_EXTRA_TRANSFERS": 1,
+    # QCR (cola / capacidad nominal) por encima del cual una alternativa se
+    # considera claramente mas presionada que el Default.
+    "QCR_TOLERANCE": 0.5,
+
     # --- cost function, everything in hours -------------------------------
     # Extra time charged for changing service route at a transshipment port,
     # on top of the wait for the next departure. Covers discharge, yard time
@@ -59,8 +79,10 @@ _NUMERIC_KEYS = {
     "QUEUE_WEIGHT",
     "PORT_CALL_HOURS",
     "ANTICIPATION_DAYS",
+    "MIN_EFFECTIVE_SAVING",
+    "QCR_TOLERANCE",
 }
-_INTEGER_KEYS = {"MAX_TRANSFERS"}
+_INTEGER_KEYS = {"MAX_TRANSFERS", "MAX_EXTRA_TRANSFERS"}
 _BOOLEAN_KEYS = {"CONGESTION_AWARE", "AVOID_CLOSED_PORTS"}
 
 

@@ -189,6 +189,14 @@ def run(args) -> dict:
         "warm_up_seconds": warm_up_seconds,
     }
 
+    try:
+        from response_strategies.challenger_routing import DIAGNOSTICS
+
+        if any(DIAGNOSTICS.values()):
+            summary["challenger_diagnostics"] = dict(DIAGNOSTICS)
+    except ImportError:
+        pass
+
     if not args.no_csv:
         write_all(sim, output_directory)
         write_att_by_period(output_directory, att_period_rows)

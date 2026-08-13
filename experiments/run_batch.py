@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import statistics
 import subprocess
 import sys
@@ -59,6 +60,10 @@ def parse_arguments(argv=None):
                              "(default: Output/runs)")
     parser.add_argument("--no-csv", action="store_true",
                         help="skip the per-run CSV set")
+    parser.add_argument("--detached", action="store_true",
+                        help="ignore Ctrl+C in the driver. Use it when the batch "
+                             "runs unattended (scheduled task, detached shell); "
+                             "stop it with taskkill.")
     parser.add_argument("--quiet", action="store_true",
                         help="hide the per-period progress of each run. Without "
                              "it the runs stream their progress, which is the "
@@ -122,6 +127,11 @@ def run_one(item):
 
 def main(argv=None) -> int:
     args = parse_arguments(argv)
+    if args.detached:
+        # The children already have their own process group; this protects the
+        # driver itself, which otherwise dies to the same stray console Ctrl+C
+        # and takes the batch report with it. Stop it with taskkill instead.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     commands = build_commands(args)
     print(f"Running {len(commands)} simulations, {args.workers} at a time.", flush=True)
 

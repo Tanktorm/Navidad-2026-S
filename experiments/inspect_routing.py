@@ -63,8 +63,13 @@ def build_context(scenario):
 
 
 def evaluation_time(day):
-    """Disruption offsets are measured from ``datetime.min``, same as the model."""
-    return dt.datetime.min + dt.timedelta(days=day)
+    """Convert a measured day into the model's clock time.
+
+    ``disruption_scenario.py`` schedules every plan at ``WARM_UP_DAYS + day``
+    and the model clock starts at ``datetime.min``, so the warm-up has to be
+    added or the evaluation lands on a network with no disruption active.
+    """
+    return dt.datetime.min + dt.timedelta(days=WARM_UP_DAYS + day)
 
 
 def apply_leg_multipliers(context, now):
