@@ -28,6 +28,11 @@ disrupción se lee de ``context.disruption_plans`` en el instante de decidir.
 
 from __future__ import annotations
 
+import datetime as dt
+import heapq
+import itertools
+import math
+
 from maritime_data_context import Booking
 
 from .default_strategy import (
@@ -58,7 +63,253 @@ DIAGNOSTICS = {
     "alternative_selected": 0,
     "rescued": 0,
     "rescue_failed": 0,
+    # --- foresight ---
+    "foresight_same_as_default": 0,
+    "foresight_differs": 0,
+    "foresight_avoided_future_window": 0,
+    "foresight_used_expiring_window": 0,
+    "foresight_no_path": 0,
 }
+
+
+# ---------------------------------------------------------------------------
+# FORESIGHT: la red es lenta, la disrupción es corta, y el Default decide
+# mirando solo el instante presente.
+#
+# DefaultStrategy prohíbe un tramo si está congestionado **ahora**. Pero un
+# contenedor tarda días en llegar a ese tramo: los headways van de 2.7 a 15.6
+# días y los ciclos de 8 a 78. Cuando la carga llega, la foto ya cambió. Eso
+# produce dos errores simétricos:
+#
+#   * se desvía (o se vara) carga por una disrupción que habrá terminado antes
+#     de que la carga llegue allí;
+#   * se manda carga por un tramo libre hoy que estará congestionado, o hacia un
+#     puerto que estará cerrado, justo cuando la carga llegue.
+#
+# FORESIGHT mantiene exactamente el criterio del Default —camino de menor
+# distancia— y cambia solo *cuándo* se evalúa si un tramo o un puerto está
+# disponible: en el momento estimado de llegada a ese tramo, no en el momento de
+# decidir. Fuera de las ventanas de disrupción produce la misma decisión que el
+# Default, tramo por tramo.
+# ---------------------------------------------------------------------------
+
+
+class _Span:
+    """Un tramo bookeable con el detalle temporal de los legs que atraviesa."""
+
+    __slots__ = (
+        "service_route", "departure_port", "arrival_port",
+        "departure_segment_index", "arrival_segment_index",
+        "distance", "legs", "total_hours",
+    )
+
+    def __init__(self, service_route, departure_port, arrival_port,
+                 departure_segment_index, arrival_segment_index,
+                 distance, legs, total_hours):
+        self.service_route = service_route
+        self.departure_port = departure_port
+        self.arrival_port = arrival_port
+        self.departure_segment_index = departure_segment_index
+        self.arrival_segment_index = arrival_segment_index
+        self.distance = distance
+        # legs = [(leg, horas_desde_el_inicio_del_span_hasta_entrar,
+        #               horas_hasta_salir_del_leg)]
+        self.legs = legs
+        self.total_hours = total_hours
+
+
+class _Topology:
+    """Geometría y frecuencias de la red. No depende del estado de disrupción."""
+
+    def __init__(self):
+        self.key = None
+        self.spans_by_port = {}
+        self.headway_hours = {}
+
+
+_TOPOLOGY = {}
+
+
+def _topology(context) -> _Topology:
+    cached = _TOPOLOGY.get(id(context))
+    if cached is None:
+        cached = _Topology()
+        _TOPOLOGY[id(context)] = cached
+
+    key = tuple(
+        (id(route), len(route.segments), len(route.deployed_vessels))
+        for route in context.service_routes
+    )
+    if key == cached.key:
+        return cached
+
+    port_call_hours = PARAMS["PORT_CALL_HOURS"]
+    spans_by_port = {}
+    headway_hours = {}
+
+    for route in context.service_routes:
+        segments = sorted(route.segments, key=lambda s: s.sequence_index)
+        vessels = [v for v in route.deployed_vessels if v.vessel_class is not None]
+        if not segments or not vessels:
+            continue
+        speed = sum(v.vessel_class.sailing_speed for v in vessels) / len(vessels)
+        if speed <= 0:
+            continue
+
+        leg_hours = [
+            segment.associated_leg.sailing_distance / speed for segment in segments
+        ]
+        cycle = sum(leg_hours) + port_call_hours * len(segments)
+        headway_hours[id(route)] = cycle / len(vessels)
+
+        count = len(segments)
+        for start in range(count):
+            departure_port = segments[start].associated_leg.departure_port
+            distance = 0.0
+            hours = 0.0
+            legs = []
+            for step in range(1, count):
+                index = (start + step - 1) % count
+                leg = segments[index].associated_leg
+                if step > 1:
+                    hours += port_call_hours
+                entry_hours = hours
+                hours += leg_hours[index]
+                distance += leg.sailing_distance
+                legs.append((leg, entry_hours, hours))
+                arrival_port = leg.arrival_port
+                if arrival_port is departure_port:
+                    break
+                spans_by_port.setdefault(departure_port, []).append(
+                    _Span(route, departure_port, arrival_port,
+                          start + 1, index + 1, distance, list(legs), hours)
+                )
+
+    cached.key = key
+    cached.spans_by_port = spans_by_port
+    cached.headway_hours = headway_hours
+    return cached
+
+
+class _Windows:
+    """Ventanas de disrupción resueltas a tiempo absoluto, una sola vez."""
+
+    def __init__(self, context):
+        self.leg_windows = {}
+        self.port_windows = {}
+        for plan in context.disruption_plans:
+            if plan.start_offset_days is None or plan.duration_days is None:
+                continue
+            start = dt.datetime.min + dt.timedelta(days=plan.start_offset_days)
+            end = start + dt.timedelta(days=plan.duration_days)
+            if plan.target_leg is not None and plan.multiplier > 1:
+                self.leg_windows.setdefault(id(plan.target_leg), []).append(
+                    (start, end, plan.multiplier)
+                )
+            if plan.target_berth is not None and plan.close_berth:
+                port = getattr(plan.target_berth, "port", None)
+                if port is not None:
+                    self.port_windows.setdefault(port.name.casefold(), []).append(
+                        (start, end)
+                    )
+
+    def leg_multiplier_at(self, leg, entry_time, exit_time):
+        """Multiplicador que sufriría un buque que recorre el leg en esa franja."""
+        worst = 1.0
+        for start, end, multiplier in self.leg_windows.get(id(leg), ()):  # pocas
+            if entry_time < end and exit_time > start:
+                worst = max(worst, multiplier)
+        return worst
+
+    def port_closed_at(self, port, when):
+        for start, end in self.port_windows.get(port.name.casefold(), ()):
+            if start <= when < end:
+                return True
+        return False
+
+
+_WINDOWS = {}
+
+
+def _windows(context) -> _Windows:
+    cached = _WINDOWS.get(id(context))
+    if cached is None:
+        cached = _Windows(context)
+        _WINDOWS[id(context)] = cached
+    return cached
+
+
+def _foresight_path(context, now, origin_port, destination_port, price_congestion=False):
+    """Camino de menor distancia, con la disponibilidad evaluada a la hora de llegada.
+
+    Con ``price_congestion=False`` un tramo congestionado en su franja se prohíbe,
+    igual que hace el Default, solo que en el momento correcto. Con ``True`` no se
+    prohíbe: se cobra multiplicando su distancia, que es el rescate de la sección
+    anterior llevado al dominio temporal.
+    """
+    topology = _topology(context)
+    windows = _windows(context)
+    wait_fraction = PARAMS["WAIT_FRACTION"]
+
+    counter = itertools.count()
+    best = {origin_port: 0.0}
+    elapsed_at = {origin_port: 0.0}
+    previous = {}
+    heap = [(0.0, 0.0, next(counter), origin_port)]
+
+    while heap:
+        cost, elapsed, _, port = heapq.heappop(heap)
+        if cost > best.get(port, math.inf):
+            continue
+        if port is destination_port:
+            break
+
+        for span in topology.spans_by_port.get(port, ()):
+            headway = topology.headway_hours.get(id(span.service_route))
+            if headway is None:
+                continue
+            boarding = wait_fraction * headway
+            penalty = 1.0
+            blocked = False
+            for leg, entry_offset, exit_offset in span.legs:
+                entry = now + dt.timedelta(hours=elapsed + boarding + entry_offset)
+                exit_time = now + dt.timedelta(hours=elapsed + boarding + exit_offset)
+                multiplier = windows.leg_multiplier_at(leg, entry, exit_time)
+                if multiplier > 1.0:
+                    if price_congestion:
+                        penalty = max(penalty, multiplier)
+                    else:
+                        blocked = True
+                        break
+                if windows.port_closed_at(leg.arrival_port, exit_time):
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            next_cost = cost + span.distance * penalty
+            next_elapsed = elapsed + boarding + span.total_hours
+            if next_cost >= best.get(span.arrival_port, math.inf):
+                continue
+            best[span.arrival_port] = next_cost
+            elapsed_at[span.arrival_port] = next_elapsed
+            previous[span.arrival_port] = span
+            heapq.heappush(
+                heap, (next_cost, next_elapsed, next(counter), span.arrival_port)
+            )
+
+    if destination_port not in previous:
+        return None
+    path = []
+    cursor = destination_port
+    while cursor is not origin_port:
+        span = previous.get(cursor)
+        if span is None:
+            return None
+        path.append(span)
+        cursor = span.departure_port
+    path.reverse()
+    return path
 
 
 class _Graphs:
@@ -372,3 +623,70 @@ def assign_rescue(context, now, shipment):
 
     DIAGNOSTICS["rescued"] += 1
     return _apply(shipment, rescue)
+
+
+def _chain(path):
+    return tuple(
+        (id(span.service_route), span.departure_segment_index,
+         span.arrival_segment_index)
+        for span in path
+    )
+
+
+def assign_foresight(context, now, shipment):
+    """FORESIGHT: el criterio del Default, evaluado en el momento correcto.
+
+    Se conserva la función objetivo del Default —distancia navegada— porque es
+    lo que ha demostrado funcionar: no compra transbordos y no persigue esperas
+    difíciles de estimar. Lo único que cambia es que la disponibilidad de cada
+    tramo y de cada puerto se evalúa en la hora estimada de llegada de la carga
+    a ese punto, no en la hora de tomar la decisión.
+
+    Si ni siquiera así hay camino, se cobra la congestión en vez de prohibirla
+    (el rescate), de modo que ninguna carga se queda esperando a que termine la
+    disrupción.
+    """
+    demand = shipment.demand
+    origin_port, destination_port = demand.origin_port, demand.destination_port
+    if origin_port is destination_port:
+        return None
+
+    DIAGNOSTICS["shipments_seen"] += 1
+    graphs = _graphs(context, now)
+    default_path = _default_path(context, graphs, origin_port, destination_port)
+
+    path = _foresight_path(context, now, origin_port, destination_port)
+    if path is None:
+        path = _foresight_path(
+            context, now, origin_port, destination_port, price_congestion=True
+        )
+        if path is None:
+            DIAGNOSTICS["foresight_no_path"] += 1
+            return None
+        DIAGNOSTICS["rescued"] += 1
+
+    if default_path is None:
+        DIAGNOSTICS["foresight_differs"] += 1
+        DIAGNOSTICS["foresight_used_expiring_window"] += 1
+    elif _chain(path) == _chain(default_path):
+        DIAGNOSTICS["foresight_same_as_default"] += 1
+    else:
+        DIAGNOSTICS["foresight_differs"] += 1
+        # ¿Se desvió de algo que hoy está limpio (ventana futura) o aprovechó
+        # algo que hoy está sucio pero estará libre al llegar?
+        if effective_distance_of_spans(path) > 0 and touches_disruption(
+            default_path, graphs.congested_ids
+        ):
+            DIAGNOSTICS["foresight_used_expiring_window"] += 1
+        else:
+            DIAGNOSTICS["foresight_avoided_future_window"] += 1
+
+    return _apply(shipment, path)
+
+
+def effective_distance_of_spans(path):
+    return sum(
+        leg.sailing_distance * leg.sailing_time_multiplier
+        for span in path
+        for leg, _entry, _exit in span.legs
+    )

@@ -455,6 +455,8 @@ class UserStrategy:
             return challenger_routing.assign_challenger(context, now, shipment)
         if mode == "rescue":
             return challenger_routing.assign_rescue(context, now, shipment)
+        if mode == "foresight":
+            return challenger_routing.assign_foresight(context, now, shipment)
 
         demand = shipment.demand
         origin_port = demand.origin_port

@@ -105,7 +105,9 @@ def _load() -> dict:
     if params_file:
         path = Path(params_file)
         if path.is_file():
-            for key, value in json.loads(path.read_text(encoding="utf-8")).items():
+            # utf-8-sig: los editores de Windows y PowerShell escriben BOM, y
+            # json.loads lo rechaza.
+            for key, value in json.loads(path.read_text(encoding="utf-8-sig")).items():
                 if key in values:
                     values[key] = _coerce(key, value)
 
