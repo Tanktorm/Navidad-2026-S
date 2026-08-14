@@ -30,6 +30,10 @@ DEFAULTS = {
     #                carga esperando a que termine la disrupcion, se cobra el
     #                tramo congestionado por su multiplicador y se enruta.
     "ROUTING_MODE": "time",
+    # Fusionar tramos consecutivos del mismo servicio en una sola reserva. Sin
+    # esto la carga se descarga y se vuelve a cargar en el puerto intermedio
+    # aunque el buque siga de largo: un transbordo que no existe.
+    "NORMALIZE_PATH": True,
     # Margen minimo de distancia efectiva que una alternativa debe ahorrar
     # para sustituir al Default (modo "challenger").
     "MIN_EFFECTIVE_SAVING": 0.0,
@@ -83,7 +87,7 @@ _NUMERIC_KEYS = {
     "QCR_TOLERANCE",
 }
 _INTEGER_KEYS = {"MAX_TRANSFERS", "MAX_EXTRA_TRANSFERS"}
-_BOOLEAN_KEYS = {"CONGESTION_AWARE", "AVOID_CLOSED_PORTS"}
+_BOOLEAN_KEYS = {"CONGESTION_AWARE", "AVOID_CLOSED_PORTS", "NORMALIZE_PATH"}
 
 
 def _coerce(key, value):

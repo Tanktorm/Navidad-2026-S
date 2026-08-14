@@ -94,69 +94,81 @@ def parse_arguments(argv=None):
 # --------------------------------------------------------------------------
 
 def suggest_parameters(trial) -> dict:
-    """Everything the strategy reads, including the structural choices.
+    """El espacio de búsqueda, con las decisiones de diseño dentro.
 
-    Tuning only numbers finds the best version of one design. Offering the
-    design decisions as categorical parameters lets the optimizer compare
-    designs, which is the only way past a badly shaped cost function.
+    Calibrar números encuentra la mejor versión de **una** estrategia. Si esa
+    estrategia tiene una rama que nunca se ejecuta, todos los valores dan el
+    mismo resultado y la búsqueda no aprende nada: es exactamente lo que le
+    pasó a la campaña de doce corridas del equipo, donde nueve combinaciones
+    distintas dieron 20.4638 hasta el último decimal.
+
+    Por eso lo primero que se sortea aquí es la **política de ruteo**, y solo
+    después los números que esa política sí usa. Así el optimizador compara
+    diseños, no decorados.
     """
+    mode = trial.suggest_categorical(
+        "ROUTING_MODE", ["challenger", "rescue", "foresight", "time"]
+    )
     parameters = {
-        "TRANSFER_BUFFER_HOURS": trial.suggest_float("TRANSFER_BUFFER_HOURS", 0.0, 48.0),
-        "WAIT_FRACTION": trial.suggest_float("WAIT_FRACTION", 0.25, 1.0),
-        "QUEUE_WEIGHT": trial.suggest_float("QUEUE_WEIGHT", 0.0, 3.0),
-        "PORT_CALL_HOURS": trial.suggest_float("PORT_CALL_HOURS", 0.0, 36.0),
+        "ROUTING_MODE": mode,
+        # Fusionar tramos contiguos del mismo servicio. Medido en el repo del
+        # equipo como la diferencia entre 20.79 y 20.46, así que entra como
+        # variable y no como supuesto.
+        "NORMALIZE_PATH": trial.suggest_categorical("NORMALIZE_PATH", [True, False]),
         "MAX_TRANSFERS": trial.suggest_int("MAX_TRANSFERS", 1, 3),
-        "ANTICIPATION_DAYS": trial.suggest_float("ANTICIPATION_DAYS", 0.0, 15.0),
-        "CONGESTION_AWARE": trial.suggest_categorical("CONGESTION_AWARE", [True, False]),
-        "ALTERNATIVE_ROUTES": trial.suggest_categorical(
-            "ALTERNATIVE_ROUTES", ["default", "off"]
-        ),
         "REROUTE_IN_TRANSIT": trial.suggest_categorical(
             "REROUTE_IN_TRANSIT", ["default", "off"]
         ),
+        "ALTERNATIVE_ROUTES": trial.suggest_categorical(
+            "ALTERNATIVE_ROUTES", ["default", "off"]
+        ),
     }
+
+    if mode in {"foresight", "time"}:
+        # Solo estas dos usan una estimación temporal.
+        parameters["WAIT_FRACTION"] = trial.suggest_float("WAIT_FRACTION", 0.0, 1.0)
+        parameters["PORT_CALL_HOURS"] = trial.suggest_float(
+            "PORT_CALL_HOURS", 0.0, 36.0
+        )
+
+    if mode == "time":
+        parameters["TRANSFER_BUFFER_HOURS"] = trial.suggest_float(
+            "TRANSFER_BUFFER_HOURS", 0.0, 96.0
+        )
+        parameters["QUEUE_WEIGHT"] = trial.suggest_float("QUEUE_WEIGHT", 0.0, 3.0)
+        parameters["CONGESTION_AWARE"] = trial.suggest_categorical(
+            "CONGESTION_AWARE", [True, False]
+        )
+
+    if mode == "challenger":
+        parameters["MIN_EFFECTIVE_SAVING"] = trial.suggest_float(
+            "MIN_EFFECTIVE_SAVING", 0.0, 2000.0
+        )
+        parameters["QCR_TOLERANCE"] = trial.suggest_float("QCR_TOLERANCE", 0.0, 2.0)
+        parameters["MAX_EXTRA_TRANSFERS"] = trial.suggest_int(
+            "MAX_EXTRA_TRANSFERS", 0, 2
+        )
+
     return parameters
 
 
 # The strategy's shipped defaults: worth evaluating before anything else so the
 # optimizer does not spend trials rediscovering a sensible starting point.
 SEED_TRIALS = [
-    {
-        "TRANSFER_BUFFER_HOURS": 24.0,
-        "WAIT_FRACTION": 0.5,
-        "QUEUE_WEIGHT": 1.0,
-        "PORT_CALL_HOURS": 12.0,
-        "MAX_TRANSFERS": 2,
-        "ANTICIPATION_DAYS": 0.0,
-        "CONGESTION_AWARE": True,
-        "ALTERNATIVE_ROUTES": "default",
-        "REROUTE_IN_TRANSIT": "default",
-    },
-    {
-        # No transfer penalty, no queue term: closest thing to "distance only"
-        # inside this parameterisation. A useful control.
-        "TRANSFER_BUFFER_HOURS": 0.0,
-        "WAIT_FRACTION": 0.25,
-        "QUEUE_WEIGHT": 0.0,
-        "PORT_CALL_HOURS": 0.0,
-        "MAX_TRANSFERS": 3,
-        "ANTICIPATION_DAYS": 0.0,
-        "CONGESTION_AWARE": True,
-        "ALTERNATIVE_ROUTES": "default",
-        "REROUTE_IN_TRANSIT": "default",
-    },
-    {
-        # Strongly connection-averse, anticipating disruptions.
-        "TRANSFER_BUFFER_HOURS": 40.0,
-        "WAIT_FRACTION": 0.75,
-        "QUEUE_WEIGHT": 2.0,
-        "PORT_CALL_HOURS": 18.0,
-        "MAX_TRANSFERS": 1,
-        "ANTICIPATION_DAYS": 10.0,
-        "CONGESTION_AWARE": True,
-        "ALTERNATIVE_ROUTES": "default",
-        "REROUTE_IN_TRANSIT": "default",
-    },
+    # Lo que ya sabemos que funciona razonablemente: no gastar ensayos en
+    # redescubrirlo.
+    {"ROUTING_MODE": "challenger", "NORMALIZE_PATH": True, "MAX_TRANSFERS": 3,
+     "REROUTE_IN_TRANSIT": "default", "ALTERNATIVE_ROUTES": "default",
+     "MIN_EFFECTIVE_SAVING": 0.0, "QCR_TOLERANCE": 0.5, "MAX_EXTRA_TRANSFERS": 1},
+    # El mismo, sin normalizar: aísla cuánto aporta la fusión de tramos.
+    {"ROUTING_MODE": "challenger", "NORMALIZE_PATH": False, "MAX_TRANSFERS": 3,
+     "REROUTE_IN_TRANSIT": "default", "ALTERNATIVE_ROUTES": "default",
+     "MIN_EFFECTIVE_SAVING": 0.0, "QCR_TOLERANCE": 0.5, "MAX_EXTRA_TRANSFERS": 1},
+    {"ROUTING_MODE": "foresight", "NORMALIZE_PATH": True, "MAX_TRANSFERS": 3,
+     "REROUTE_IN_TRANSIT": "default", "ALTERNATIVE_ROUTES": "default",
+     "WAIT_FRACTION": 0.5, "PORT_CALL_HOURS": 12.0},
+    {"ROUTING_MODE": "rescue", "NORMALIZE_PATH": True, "MAX_TRANSFERS": 3,
+     "REROUTE_IN_TRANSIT": "default", "ALTERNATIVE_ROUTES": "default"},
 ]
 
 

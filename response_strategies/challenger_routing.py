@@ -506,17 +506,52 @@ def clear_bookings(shipment):
     shipment.current_booking_index = None
 
 
+def normalized_bookings(path):
+    """Fusiona tramos consecutivos del mismo servicio en una sola reserva.
+
+    El shortest path puede devolver dos tramos seguidos de la misma ruta de
+    servicio: el buque pasa de largo, pero como son dos bookings distintos la
+    carga se descarga y se vuelve a cargar en el puerto intermedio. Es un
+    transbordo que no existe. Fusionarlos lo elimina.
+
+    Devuelve una lista de ``(service_route, departure_index, arrival_index)``.
+    """
+    merged = []
+    for edge in path:
+        route = edge.service_route
+        if merged:
+            last_route, last_departure, last_arrival = merged[-1]
+            if last_route is route:
+                count = len(route.segments)
+                if count and edge.departure_segment_index == (last_arrival % count) + 1:
+                    merged[-1] = (route, last_departure, edge.arrival_segment_index)
+                    continue
+        merged.append(
+            (route, edge.departure_segment_index, edge.arrival_segment_index)
+        )
+    return merged
+
+
 def materialize_path(shipment, path):
-    for sequence_index, edge in enumerate(path, start=1):
+    if PARAMS["NORMALIZE_PATH"]:
+        bookings = normalized_bookings(path)
+    else:
+        bookings = [
+            (edge.service_route, edge.departure_segment_index,
+             edge.arrival_segment_index)
+            for edge in path
+        ]
+
+    for sequence_index, (route, departure, arrival) in enumerate(bookings, start=1):
         booking = Booking(
             sequence_index=sequence_index,
             shipment=shipment,
-            service_route=edge.service_route,
-            departure_segment_index=edge.departure_segment_index,
-            arrival_segment_index=edge.arrival_segment_index,
+            service_route=route,
+            departure_segment_index=departure,
+            arrival_segment_index=arrival,
         )
         shipment.associated_bookings.append(booking)
-        edge.service_route.associated_bookings.append(booking)
+        route.associated_bookings.append(booking)
     shipment.current_booking_index = 1
 
 
