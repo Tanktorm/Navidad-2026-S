@@ -457,6 +457,8 @@ class UserStrategy:
             return challenger_routing.assign_rescue(context, now, shipment)
         if mode == "foresight":
             return challenger_routing.assign_foresight(context, now, shipment)
+        if mode == "unified":
+            return challenger_routing.assign_unified(context, now, shipment)
 
         demand = shipment.demand
         origin_port = demand.origin_port

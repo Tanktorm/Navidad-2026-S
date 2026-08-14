@@ -107,7 +107,7 @@ def suggest_parameters(trial) -> dict:
     diseños, no decorados.
     """
     mode = trial.suggest_categorical(
-        "ROUTING_MODE", ["challenger", "rescue", "foresight", "time"]
+        "ROUTING_MODE", ["unified", "challenger", "rescue", "foresight", "time"]
     )
     parameters = {
         "ROUTING_MODE": mode,
@@ -123,6 +123,26 @@ def suggest_parameters(trial) -> dict:
             "ALTERNATIVE_ROUTES", ["default", "off"]
         ),
     }
+
+    if mode == "unified":
+        # Todo el costo en millas nauticas: no se mezclan magnitudes. Con las
+        # dos penalizaciones a cero y USE_FORESIGHT desactivado esta politica
+        # reproduce exactamente al Default, verificado sobre los 380 pares
+        # origen-destino. El espacio contiene al Default como un punto, asi
+        # que el optimizador solo puede empatarlo o mejorarlo.
+        parameters["TRANSFER_PENALTY_NM"] = trial.suggest_float(
+            "TRANSFER_PENALTY_NM", 0.0, 6000.0
+        )
+        parameters["HEADWAY_PENALTY_NM_PER_DAY"] = trial.suggest_float(
+            "HEADWAY_PENALTY_NM_PER_DAY", 0.0, 1500.0
+        )
+        parameters["USE_FORESIGHT"] = trial.suggest_categorical(
+            "USE_FORESIGHT", [True, False]
+        )
+        parameters["WAIT_FRACTION"] = trial.suggest_float("WAIT_FRACTION", 0.0, 1.0)
+        parameters["PORT_CALL_HOURS"] = trial.suggest_float(
+            "PORT_CALL_HOURS", 0.0, 36.0
+        )
 
     if mode in {"foresight", "time"}:
         # Solo estas dos usan una estimación temporal.
@@ -154,7 +174,28 @@ def suggest_parameters(trial) -> dict:
 
 # The strategy's shipped defaults: worth evaluating before anything else so the
 # optimizer does not spend trials rediscovering a sensible starting point.
+_UNIFIED = {
+    "ROUTING_MODE": "unified", "MAX_TRANSFERS": 3,
+    "REROUTE_IN_TRANSIT": "default", "ALTERNATIVE_ROUTES": "default",
+    "PORT_CALL_HOURS": 12.0,
+}
+
 SEED_TRIALS = [
+    # Control exacto: reproduce al Default. Es el punto contra el que se mide
+    # todo, y tenerlo dentro del estudio evita depender de una corrida externa.
+    dict(_UNIFIED, TRANSFER_PENALTY_NM=0.0, HEADWAY_PENALTY_NM_PER_DAY=0.0,
+         USE_FORESIGHT=False, WAIT_FRACTION=0.5, NORMALIZE_PATH=False),
+    # Solo la fusion de tramos: aisla cuanto vale la normalizacion.
+    dict(_UNIFIED, TRANSFER_PENALTY_NM=0.0, HEADWAY_PENALTY_NM_PER_DAY=0.0,
+         USE_FORESIGHT=False, WAIT_FRACTION=0.5, NORMALIZE_PATH=True),
+    # Normalizacion mas evaluar la disponibilidad en la hora de llegada.
+    dict(_UNIFIED, TRANSFER_PENALTY_NM=0.0, HEADWAY_PENALTY_NM_PER_DAY=0.0,
+         USE_FORESIGHT=True, WAIT_FRACTION=0.5, NORMALIZE_PATH=True),
+    # Y encima la aversion a transbordos, que es lo que al equipo le funciono.
+    dict(_UNIFIED, TRANSFER_PENALTY_NM=2000.0, HEADWAY_PENALTY_NM_PER_DAY=0.0,
+         USE_FORESIGHT=True, WAIT_FRACTION=0.5, NORMALIZE_PATH=True),
+    dict(_UNIFIED, TRANSFER_PENALTY_NM=2000.0, HEADWAY_PENALTY_NM_PER_DAY=300.0,
+         USE_FORESIGHT=True, WAIT_FRACTION=0.5, NORMALIZE_PATH=True),
     # Lo que ya sabemos que funciona razonablemente: no gastar ensayos en
     # redescubrirlo.
     {"ROUTING_MODE": "challenger", "NORMALIZE_PATH": True, "MAX_TRANSFERS": 3,
@@ -257,6 +298,21 @@ def storage_url(args) -> str:
     return f"sqlite:///{(STUDY_DIRECTORY / (args.study + '.db')).as_posix()}"
 
 
+def build_storage(args):
+    """SQLite tolerante a varios trabajadores escribiendo a la vez.
+
+    Sin el timeout, dos procesos que escriben en el mismo instante levantan
+    ``database is locked``; sin el arranque escalonado, dos que crean el
+    estudio a la vez levantan ``table alembic_version already exists``.
+    """
+    import optuna
+
+    return optuna.storages.RDBStorage(
+        url=storage_url(args),
+        engine_kwargs={"connect_args": {"timeout": 120}},
+    )
+
+
 def load_study(args, create: bool = True):
     import optuna
 
@@ -274,14 +330,14 @@ def load_study(args, create: bool = True):
     if create:
         return optuna.create_study(
             study_name=args.study,
-            storage=storage_url(args),
+            storage=build_storage(args),
             direction="minimize",
             sampler=sampler,
             pruner=pruner,
             load_if_exists=True,
         )
     return optuna.load_study(
-        study_name=args.study, storage=storage_url(args), sampler=sampler
+        study_name=args.study, storage=build_storage(args), sampler=sampler
     )
 
 

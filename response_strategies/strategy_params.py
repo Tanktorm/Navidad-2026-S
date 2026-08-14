@@ -34,6 +34,17 @@ DEFAULTS = {
     # esto la carga se descarga y se vuelve a cargar en el puerto intermedio
     # aunque el buque siga de largo: un transbordo que no existe.
     "NORMALIZE_PATH": True,
+    # --- modo "unified": todo el costo en millas nauticas ------------------
+    # Millas equivalentes que se cobran por cada transbordo. Es la intuicion
+    # del equipo (los transbordos cuestan) expresada en la moneda del Default
+    # en vez de en horas, que es lo que rompio los intentos anteriores.
+    "TRANSFER_PENALTY_NM": 0.0,
+    # Millas equivalentes por cada dia de espera esperada al embarcar. Es lo
+    # que hace caro un servicio infrecuente.
+    "HEADWAY_PENALTY_NM_PER_DAY": 0.0,
+    # Evaluar la disponibilidad de tramos y puertos en la hora estimada de
+    # llegada de la carga, en vez de en la hora de decidir.
+    "USE_FORESIGHT": True,
     # Margen minimo de distancia efectiva que una alternativa debe ahorrar
     # para sustituir al Default (modo "challenger").
     "MIN_EFFECTIVE_SAVING": 0.0,
@@ -85,9 +96,13 @@ _NUMERIC_KEYS = {
     "ANTICIPATION_DAYS",
     "MIN_EFFECTIVE_SAVING",
     "QCR_TOLERANCE",
+    "TRANSFER_PENALTY_NM",
+    "HEADWAY_PENALTY_NM_PER_DAY",
 }
 _INTEGER_KEYS = {"MAX_TRANSFERS", "MAX_EXTRA_TRANSFERS"}
-_BOOLEAN_KEYS = {"CONGESTION_AWARE", "AVOID_CLOSED_PORTS", "NORMALIZE_PATH"}
+_BOOLEAN_KEYS = {
+    "CONGESTION_AWARE", "AVOID_CLOSED_PORTS", "NORMALIZE_PATH", "USE_FORESIGHT",
+}
 
 
 def _coerce(key, value):

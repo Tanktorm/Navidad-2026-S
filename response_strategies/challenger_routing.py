@@ -660,6 +660,127 @@ def assign_rescue(context, now, shipment):
     return _apply(shipment, rescue)
 
 
+def _unified_path(context, now, origin_port, destination_port,
+                  transfer_penalty, headway_penalty, use_foresight,
+                  price_congestion=False):
+    """Ruteo del Default generalizado, con todo el costo en millas náuticas.
+
+    El Default elige el camino de menor distancia navegada. Los intentos
+    anteriores fallaron al sustituir ese criterio por una suma de horas, que
+    mezcla magnitudes difíciles de estimar. Aquí se mantiene la distancia como
+    unica unidad y se le suman dos penalizaciones, tambien en millas:
+
+    * ``transfer_penalty`` millas por cada transbordo, que es la intuición del
+      equipo —los transbordos cuestan— expresada en la moneda del Default en
+      vez de en horas;
+    * ``headway_penalty`` millas por cada día de espera esperada al embarcar,
+      que es lo que hace caro un servicio infrecuente.
+
+    Con ambas penalizaciones en cero y ``use_foresight`` desactivado, esta
+    función reproduce exactamente el criterio del Default. Todo lo demás son
+    grados de libertad para el optimizador.
+    """
+    topology = _topology(context)
+    windows = _windows(context)
+    wait_fraction = PARAMS["WAIT_FRACTION"]
+
+    counter = itertools.count()
+    best = {origin_port: 0.0}
+    previous = {}
+    heap = [(0.0, 0.0, next(counter), origin_port, None)]
+
+    while heap:
+        cost, elapsed, _, port, arrived_on = heapq.heappop(heap)
+        if cost > best.get(port, math.inf):
+            continue
+        if port is destination_port:
+            break
+
+        for span in topology.spans_by_port.get(port, ()):
+            headway = topology.headway_hours.get(id(span.service_route))
+            if headway is None:
+                continue
+            boarding = wait_fraction * headway
+
+            penalty = 1.0
+            blocked = False
+            for leg, entry_offset, exit_offset in span.legs:
+                if use_foresight:
+                    entry = now + dt.timedelta(hours=elapsed + boarding + entry_offset)
+                    exit_time = now + dt.timedelta(hours=elapsed + boarding + exit_offset)
+                else:
+                    entry = exit_time = now
+                multiplier = windows.leg_multiplier_at(leg, entry, exit_time)
+                if multiplier > 1.0:
+                    if price_congestion:
+                        penalty = max(penalty, multiplier)
+                    else:
+                        blocked = True
+                        break
+                if windows.port_closed_at(leg.arrival_port, exit_time):
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            step = span.distance * penalty
+            if arrived_on is not None and arrived_on is not span.service_route:
+                step += transfer_penalty
+            step += headway_penalty * (boarding / 24.0)
+
+            next_cost = cost + step
+            if next_cost >= best.get(span.arrival_port, math.inf):
+                continue
+            best[span.arrival_port] = next_cost
+            previous[span.arrival_port] = span
+            heapq.heappush(
+                heap,
+                (next_cost, elapsed + boarding + span.total_hours, next(counter),
+                 span.arrival_port, span.service_route),
+            )
+
+    if destination_port not in previous:
+        return None
+    path = []
+    cursor = destination_port
+    while cursor is not origin_port:
+        span = previous.get(cursor)
+        if span is None:
+            return None
+        path.append(span)
+        cursor = span.departure_port
+    path.reverse()
+    return path
+
+
+def assign_unified(context, now, shipment):
+    """El criterio del Default mas dos penalizaciones, todo en millas nauticas."""
+    demand = shipment.demand
+    origin_port, destination_port = demand.origin_port, demand.destination_port
+    if origin_port is destination_port:
+        return None
+
+    DIAGNOSTICS["shipments_seen"] += 1
+    transfer_penalty = PARAMS["TRANSFER_PENALTY_NM"]
+    headway_penalty = PARAMS["HEADWAY_PENALTY_NM_PER_DAY"]
+    use_foresight = PARAMS["USE_FORESIGHT"]
+
+    path = _unified_path(context, now, origin_port, destination_port,
+                         transfer_penalty, headway_penalty, use_foresight)
+    if path is None:
+        path = _unified_path(context, now, origin_port, destination_port,
+                             transfer_penalty, headway_penalty, use_foresight,
+                             price_congestion=True)
+        if path is None:
+            DIAGNOSTICS["foresight_no_path"] += 1
+            return None
+        DIAGNOSTICS["rescued"] += 1
+    else:
+        DIAGNOSTICS["default_unaffected"] += 1
+
+    return _apply(shipment, path)
+
+
 def _chain(path):
     return tuple(
         (id(span.service_route), span.departure_segment_index,
