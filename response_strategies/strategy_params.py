@@ -45,6 +45,12 @@ DEFAULTS = {
     # Evaluar la disponibilidad de tramos y puertos en la hora estimada de
     # llegada de la carga, en vez de en la hora de decidir.
     "USE_FORESIGHT": True,
+    # --- balanceo de lineas ------------------------------------------------
+    # "on" presta un buque de la linea con buques de sobra a la que tiene el
+    # peor agujero de horario. Donante y receptor se eligen en ejecucion.
+    "FLEET_REBALANCE": "off",
+    # Ahorro neto minimo, en TEU-dias de espera al ano, para mover un buque.
+    "FLEET_MIN_SAVING_TEU_DAYS": 20000.0,
     # Margen minimo de distancia efectiva que una alternativa debe ahorrar
     # para sustituir al Default (modo "challenger").
     "MIN_EFFECTIVE_SAVING": 0.0,
@@ -98,6 +104,7 @@ _NUMERIC_KEYS = {
     "QCR_TOLERANCE",
     "TRANSFER_PENALTY_NM",
     "HEADWAY_PENALTY_NM_PER_DAY",
+    "FLEET_MIN_SAVING_TEU_DAYS",
 }
 _INTEGER_KEYS = {"MAX_TRANSFERS", "MAX_EXTRA_TRANSFERS"}
 _BOOLEAN_KEYS = {

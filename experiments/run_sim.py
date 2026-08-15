@@ -197,6 +197,14 @@ def run(args) -> dict:
     except ImportError:
         pass
 
+    try:
+        from response_strategies.fleet_rebalance import DIAGNOSTICS as FLEET
+
+        if FLEET.get("evaluated"):
+            summary["fleet_diagnostics"] = dict(FLEET)
+    except ImportError:
+        pass
+
     if not args.no_csv:
         write_all(sim, output_directory)
         write_att_by_period(output_directory, att_period_rows)

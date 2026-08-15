@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from maritime_data_context import Booking
 
 from . import challenger_routing
+from . import timetable_routing
+from . import fleet_rebalance
 from .strategy_params import PARAMS, STRATEGY_ENABLED
 
 
@@ -435,6 +437,11 @@ class UserStrategy:
         """
         if not STRATEGY_ENABLED:
             return None
+        # El balanceo de lineas vive aqui porque este punto de decision es
+        # justo lo que modela: como despliega la naviera sus buques.
+        if PARAMS["FLEET_REBALANCE"] == "on":
+            fleet_rebalance.rebalance(context, now, vessel)
+
         if PARAMS["ALTERNATIVE_ROUTES"] == "off":
             return True
         return None
@@ -459,6 +466,10 @@ class UserStrategy:
             return challenger_routing.assign_foresight(context, now, shipment)
         if mode == "unified":
             return challenger_routing.assign_unified(context, now, shipment)
+        if mode == "surgical":
+            return challenger_routing.assign_surgical(context, now, shipment)
+        if mode == "timetable":
+            return timetable_routing.assign_timetable(context, now, shipment)
 
         demand = shipment.demand
         origin_port = demand.origin_port

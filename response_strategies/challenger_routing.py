@@ -846,3 +846,50 @@ def effective_distance_of_spans(path):
         for span in path
         for leg, _entry, _exit in span.legs
     )
+
+
+def assign_surgical(context, now, shipment):
+    """Intervención quirúrgica: tocar solo lo que el Default no puede resolver.
+
+    La métrica de puntuación es ``suma(1 - baseline/escenario) x días``. Un
+    período que se mantiene al nivel del baseline aporta **cero**. Como
+    ``1/S`` es convexa, repartir una degradación pequeña entre muchos períodos
+    cuesta más que concentrar el daño en pocos: con la misma media, el perfil
+    plano puntúa peor que el concentrado.
+
+    Medido en este repositorio: el Default conserva 12 de 36 períodos a menos
+    del 1% del baseline; la estrategia que reoptimiza todos los envíos conserva
+    1. Ese es el impuesto de tocar carga que no lo necesitaba.
+
+    Por eso aquí, si el Default encuentra ruta, se devuelve ``None`` y se le
+    deja actuar **sin alterar nada**: ni el camino, ni la normalización, ni el
+    orden de las reservas. Solo se interviene cuando el Default se queda sin
+    ninguna ruta posible, que es cuando dejaría la carga esperando a que
+    termine la disrupción.
+    """
+    demand = shipment.demand
+    origin_port, destination_port = demand.origin_port, demand.destination_port
+    if origin_port is destination_port:
+        return None
+
+    DIAGNOSTICS["shipments_seen"] += 1
+    graphs = _graphs(context, now)
+
+    if _default_path(context, graphs, origin_port, destination_port) is not None:
+        DIAGNOSTICS["default_unaffected"] += 1
+        return None
+
+    DIAGNOSTICS["default_no_path"] += 1
+    if destination_port.name.casefold() in graphs.avoid_port_names:
+        DIAGNOSTICS["rescue_failed"] += 1
+        return None
+
+    rescue = _find_shortest_booking_path(
+        context, origin_port, destination_port, graphs.effective_edges
+    )
+    if not rescue or (len(rescue) - 1) > PARAMS["MAX_TRANSFERS"]:
+        DIAGNOSTICS["rescue_failed"] += 1
+        return None
+
+    DIAGNOSTICS["rescued"] += 1
+    return _apply(shipment, rescue)
