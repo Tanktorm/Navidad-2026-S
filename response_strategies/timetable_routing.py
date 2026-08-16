@@ -58,6 +58,7 @@ import heapq
 import itertools
 import math
 
+from . import observed_timetable as obs
 from .challenger_routing import (
     _apply,
     _graphs,
@@ -108,8 +109,18 @@ class _RouteTable:
         self.phases = phases
         self.legs_by_index = legs_by_index
 
-    def next_departure(self, stop, after_hours):
-        """Primera pasada por ``stop`` en o después de ``after_hours``."""
+    def next_departure(self, stop, after_hours, context=None):
+        """Primera pasada por ``stop`` en o después de ``after_hours``.
+
+        Si hay observaciones suficientes de esa parada se usan: son la verdad
+        medida, frente a un calendario derivado que arrastra deriva de fase.
+        """
+        if context is not None:
+            seen = obs.next_departure(
+                context, self.route, stop.segment_index, after_hours
+            )
+            if seen is not None:
+                return seen
         best = math.inf
         for phase in self.phases:
             base = phase + stop.offset_hours
@@ -288,7 +299,7 @@ def earliest_arrival_path(context, now, origin_port, destination_port):
             if next_transfers > max_transfers:
                 continue
 
-            board = table.next_departure(stop, arrive_hours)
+            board = table.next_departure(stop, arrive_hours, context)
             if not math.isfinite(board):
                 continue
 

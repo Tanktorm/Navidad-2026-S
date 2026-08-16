@@ -41,6 +41,9 @@ from maritime_data_context import Booking
 from . import challenger_routing
 from . import timetable_routing
 from . import fleet_rebalance
+from . import connection_guard
+from . import surgical_boarding
+from . import observed_timetable
 from .strategy_params import PARAMS, STRATEGY_ENABLED
 
 
@@ -439,6 +442,11 @@ class UserStrategy:
             return None
         # El balanceo de lineas vive aqui porque este punto de decision es
         # justo lo que modela: como despliega la naviera sus buques.
+        # El modelo llama aqui con el buque en cada escala: es un flujo en
+        # vivo de posiciones reales y es lo que alimenta el horario observado.
+        if PARAMS["OBSERVE_TIMETABLE"] == "on":
+            observed_timetable.record(context, now, vessel)
+
         if PARAMS["FLEET_REBALANCE"] == "on":
             fleet_rebalance.rebalance(context, now, vessel)
 
@@ -466,6 +474,8 @@ class UserStrategy:
             return challenger_routing.assign_foresight(context, now, shipment)
         if mode == "unified":
             return challenger_routing.assign_unified(context, now, shipment)
+        if mode == "boarding":
+            return surgical_boarding.assign(context, now, shipment)
         if mode == "surgical":
             return challenger_routing.assign_surgical(context, now, shipment)
         if mode == "timetable":
@@ -497,6 +507,11 @@ class UserStrategy:
         """
         if not STRATEGY_ENABLED:
             return None
+        if PARAMS["CONNECTION_GUARD"] == "on":
+            # Devuelve None: DefaultStrategy sigue haciendo ademas su
+            # replanificacion por disrupcion, asi que esto es aditivo.
+            connection_guard.adjust(context, now, vessel)
+
         if PARAMS["REROUTE_IN_TRANSIT"] == "off":
             return True
         return None

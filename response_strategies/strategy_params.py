@@ -48,6 +48,27 @@ DEFAULTS = {
     # --- balanceo de lineas ------------------------------------------------
     # "on" presta un buque de la linea con buques de sobra a la que tiene el
     # peor agujero de horario. Donante y receptor se eligen en ejecucion.
+    # --- proteccion de conexiones ------------------------------------------
+    # "on" evita bajar la carga a una conexion larga cuando seguir a bordo
+    # del mismo buque la entrega antes. Es la unica forma de tocar carga ya
+    # embarcada: el puerto de transbordo no tiene punto de decision.
+    # --- embarque quirurgico ------------------------------------------------
+    # Solo se desvia un envio si su primer servicio tarda mas que esto en
+    # pasar. La espera media son 3.2 dias; el dano esta en la cola.
+    "BOARDING_WAIT_THRESHOLD_DAYS": 5.0,
+    # Y solo si el viaje es largo: la contribucion al ATT crece con el
+    # cuadrado de la duracion, asi que el presupuesto se gasta ahi.
+    "MIN_JOURNEY_DAYS": 0.0,
+    # Margen minimo para justificar el cambio.
+    "BOARDING_MARGIN_HOURS": 24.0,
+    # --- horario observado --------------------------------------------------
+    # "on" anota cuando pasa cada buque por cada parada y usa esas pasadas
+    # en vez del calendario derivado, que arrastra deriva de fase.
+    "OBSERVE_TIMETABLE": "off",
+    "CONNECTION_GUARD": "off",
+    # Margen minimo, en horas, para justificar el cambio. Evita oscilar por
+    # diferencias dentro del error de estimacion.
+    "CONNECTION_MARGIN_HOURS": 24.0,
     "FLEET_REBALANCE": "off",
     # Ahorro neto minimo, en TEU-dias de espera al ano, para mover un buque.
     "FLEET_MIN_SAVING_TEU_DAYS": 20000.0,
@@ -105,6 +126,10 @@ _NUMERIC_KEYS = {
     "TRANSFER_PENALTY_NM",
     "HEADWAY_PENALTY_NM_PER_DAY",
     "FLEET_MIN_SAVING_TEU_DAYS",
+    "CONNECTION_MARGIN_HOURS",
+    "BOARDING_WAIT_THRESHOLD_DAYS",
+    "MIN_JOURNEY_DAYS",
+    "BOARDING_MARGIN_HOURS",
 }
 _INTEGER_KEYS = {"MAX_TRANSFERS", "MAX_EXTRA_TRANSFERS"}
 _BOOLEAN_KEYS = {

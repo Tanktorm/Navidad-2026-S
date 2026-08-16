@@ -64,6 +64,10 @@ def parse_arguments(argv=None):
                         help="where to write the summary JSON (default: <out>/summary.json)")
     parser.add_argument("--no-csv", action="store_true",
                         help="skip writing the full CSV set (faster for optimization)")
+    parser.add_argument("--shipment-log", action="store_true",
+                        help="exporta un CSV con cada envio: origen, destino, TEU, "
+                             "generacion, finalizacion y duracion. Es la distribucion "
+                             "que hay detras del ATT medio.")
     parser.add_argument("--quiet", action="store_true",
                         help="only print the final summary line")
     return parser.parse_args(argv)
@@ -205,16 +209,104 @@ def run(args) -> dict:
     except ImportError:
         pass
 
+    try:
+        from response_strategies.connection_guard import DIAGNOSTICS as GUARD
+
+        if GUARD.get("calls"):
+            summary["connection_guard"] = dict(GUARD)
+    except ImportError:
+        pass
+
+    try:
+        from response_strategies.surgical_boarding import DIAGNOSTICS as BOARD
+
+        if BOARD.get("shipments_seen"):
+            summary["surgical_boarding"] = dict(BOARD)
+    except ImportError:
+        pass
+
+    try:
+        from response_strategies.observed_timetable import DIAGNOSTICS as OBS
+
+        if OBS.get("recorded"):
+            summary["observed_timetable"] = dict(OBS)
+    except ImportError:
+        pass
+
     if not args.no_csv:
         write_all(sim, output_directory)
         write_att_by_period(output_directory, att_period_rows)
         summary.update(read_secondary_kpis(output_directory))
+
+    if args.shipment_log:
+        summary["shipment_log"] = write_shipment_log(
+            sim, output_directory, measurement_start_time
+        )
 
     json_path = args.json_path or (output_directory / "summary.json")
     Path(json_path).parent.mkdir(parents=True, exist_ok=True)
     Path(json_path).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     summary["summary_path"] = str(json_path)
     return summary
+
+
+def write_shipment_log(sim, output_directory, measurement_start_time) -> dict:
+    """Un CSV con cada envio y su duracion, mas los percentiles.
+
+    El ATT publicado es una media sobre cientos de miles de envios. Sin la
+    distribucion no se sabe si el dano son muchos envios un poco tarde o
+    pocos catastroficamente tarde, y esas dos situaciones piden
+    intervenciones opuestas.
+    """
+    rows = []
+    for demand in sim.data_context.demands:
+        for shipment in demand.shipments:
+            generated = shipment.generated_time
+            if generated is None or generated < measurement_start_time:
+                continue
+            completed = shipment.completion_time
+            duration = (
+                (completed - generated).total_seconds() / 86400.0
+                if completed is not None else None
+            )
+            rows.append({
+                "Origin": demand.origin_port.name,
+                "Destination": demand.destination_port.name,
+                "TEU": shipment.teu_size,
+                "GeneratedDay": round(
+                    (generated - measurement_start_time).total_seconds() / 86400.0, 3),
+                "CompletedDay": (round(
+                    (completed - measurement_start_time).total_seconds() / 86400.0, 3)
+                    if completed is not None else ""),
+                "DurationDays": round(duration, 3) if duration is not None else "",
+            })
+
+    path = Path(output_directory) / "Shipment_Log.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[
+            "Origin", "Destination", "TEU", "GeneratedDay",
+            "CompletedDay", "DurationDays"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    done = sorted(r["DurationDays"] for r in rows if r["DurationDays"] != "")
+    teu_done = sum(r["TEU"] for r in rows if r["DurationDays"] != "")
+    teu_open = sum(r["TEU"] for r in rows if r["DurationDays"] == "")
+
+    def pct(q):
+        if not done:
+            return None
+        return done[min(len(done) - 1, int(q * len(done)))]
+
+    return {
+        "path": str(path),
+        "shipments": len(rows),
+        "completed": len(done),
+        "teu_completed": teu_done,
+        "teu_unfinished": teu_open,
+        "p50": pct(0.50), "p90": pct(0.90), "p95": pct(0.95), "p99": pct(0.99),
+        "max": done[-1] if done else None,
+    }
 
 
 def _to_number(text):
